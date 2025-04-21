@@ -16,16 +16,18 @@ app = Flask(__name__)
 def webhook():
     data = request.json
     if not data or data.get("secret") != os.getenv("WEBHOOK_SECRET"):
+        print("❌ 잘못된 웹훅 요청입니다", flush=True)
         return {"error": "unauthorized"}, 403
 
     signal = data.get("signal")
+    print(f"✅ Signal received: {signal}", flush=True)
+
     if signal == "BUY":
-        print("✅ Signal received: BUY")
         place_order("buy")
     elif signal == "TP":
-        print("✅ Signal received: TP (Close)")
         place_order("close")
     else:
+        print("❌ Unknown signal", flush=True)
         return {"error": "unknown signal"}, 400
 
     return {"status": "success"}, 200
@@ -37,7 +39,6 @@ def place_order(action):
     symbol = os.getenv("SYMBOL")
     side = os.getenv("POSITION_SIDE")  # long / short
     trade_amount = os.getenv("TRADE_AMOUNT", "1.0")  # USDT 기준
-    leverage = os.getenv("LEVERAGE", "100")
 
     url_path = "/api/v5/trade/order"
     url = "https://www.okx.com" + url_path
@@ -45,29 +46,26 @@ def place_order(action):
 
     if action == "buy":
         side_api = "buy"
-        pos_side = side
     elif action == "close":
         side_api = "sell"
-        pos_side = side
     else:
-        print("❌ Unknown action")
+        print("❌ Unknown action", flush=True)
         return
 
-    print(f"🎯 실제 사용중인 진입 금액 (USDT): {trade_amount}")
+    print(f"🎯 실제 사용중인 진입 금액 (USDT): {trade_amount}", flush=True)
 
     body = {
         "instId": symbol,
         "tdMode": "cross",
         "side": side_api,
         "ordType": "market",
-        "posSide": pos_side,
-        "ccy": "USDT",  # ✅ 중요: USDT 기준으로 주문하도록 명시
+        "posSide": side,
+        "ccy": "USDT",
         "sz": trade_amount
     }
 
     body_json = json.dumps(body, separators=(',', ':'))
     pre_hash = timestamp + 'POST' + url_path + body_json
-
     signature = base64.b64encode(
         hmac.new(api_secret.encode(), pre_hash.encode(), hashlib.sha256).digest()
     ).decode()
@@ -80,11 +78,11 @@ def place_order(action):
         'OK-ACCESS-PASSPHRASE': passphrase
     }
 
-    print("📦 요청 바디:", body_json)
-    print("📦 헤더 정보:", headers)
+    print("📦 요청 바디:", body_json, flush=True)
+    print("📦 헤더 정보:", headers, flush=True)
 
     response = requests.post(url, headers=headers, data=body_json)
-    print("✅ OKX 응답:", response.status_code, response.text)
+    print("✅ OKX 응답:", response.status_code, response.text, flush=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
