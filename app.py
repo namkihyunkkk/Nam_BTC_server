@@ -32,13 +32,43 @@ def webhook():
 
     return {"status": "success"}, 200
 
+def get_balance():
+    url = "https://www.okx.com/api/v5/account/balance?ccy=USDT"
+    timestamp = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime())
+    method = "GET"
+    request_path = "/api/v5/account/balance?ccy=USDT"
+
+    pre_hash = timestamp + method + request_path
+    signature = base64.b64encode(
+        hmac.new(os.getenv("OKX_API_SECRET").encode(), pre_hash.encode(), hashlib.sha256).digest()
+    ).decode()
+
+    headers = {
+        "OK-ACCESS-KEY": os.getenv("OKX_API_KEY"),
+        "OK-ACCESS-SIGN": signature,
+        "OK-ACCESS-TIMESTAMP": timestamp,
+        "OK-ACCESS-PASSPHRASE": os.getenv("OKX_PASSPHRASE"),
+        "Content-Type": "application/json"
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        usdt_balance = float(data['data'][0]['details'][0]['availBal'])
+        print(f"💰 사용 가능한 USDT 잔고: {usdt_balance}", flush=True)
+        return usdt_balance
+    else:
+        print("❌ 잔고 조회 실패:", response.status_code, response.text, flush=True)
+        return 0.0
+
 def place_order(action):
     api_key = os.getenv("OKX_API_KEY")
     api_secret = os.getenv("OKX_API_SECRET")
     passphrase = os.getenv("OKX_PASSPHRASE")
     symbol = os.getenv("SYMBOL")
     side = os.getenv("POSITION_SIDE")  # long / short
-    trade_amount = os.getenv("TRADE_AMOUNT", "1.0")  # USDT 기준
+    leverage = float(os.getenv("LEVERAGE", "100"))
+    trade_percent = float(os.getenv("TRADE_PERCENT", "0.001"))  # 0.001 = 0.1%
 
     url_path = "/api/v5/trade/order"
     url = "https://www.okx.com" + url_path
@@ -52,7 +82,30 @@ def place_order(action):
         print("❌ Unknown action", flush=True)
         return
 
-    print(f"🎯 실제 사용중인 진입 금액 (USDT): {trade_amount}", flush=True)
+    # 실시간 잔고 기반 진입금 계산
+    usdt_balance = get_balance()
+    cost = usdt_balance * trade_percent
+    order_usdt_value = cost * leverage
+
+    # 실시간 가격 조회
+    ticker_resp = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}")
+    if ticker_resp.status_code != 200:
+        print("❌ 시세 조회 실패", flush=True)
+        return
+    price = float(ticker_resp.json()['data'][0]['last'])
+
+    amount = round(order_usdt_value / price, 6)
+
+    # 최소 주문 수량 보정
+    min_amount = 0.001
+    if amount < min_amount:
+        print(f"⚠️ 최소 주문 수량보다 작음. 강제로 {min_amount} BTC로 주문합니다.", flush=True)
+        amount = min_amount
+
+    print(f"🎯 현재 시세: {price} USDT", flush=True)
+    print(f"🎯 내가 설정한 Cost (USDT): {cost:.4f}", flush=True)
+    print(f"🎯 레버리지 포함 주문 총액: {order_usdt_value:.2f} USDT", flush=True)
+    print(f"🎯 실제 주문 수량 (BTC): {amount}", flush=True)
 
     body = {
         "instId": symbol,
@@ -60,8 +113,7 @@ def place_order(action):
         "side": side_api,
         "ordType": "market",
         "posSide": side,
-        "ccy": "USDT",
-        "sz": trade_amount
+        "sz": str(amount)
     }
 
     body_json = json.dumps(body, separators=(',', ':'))
